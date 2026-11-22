@@ -4,7 +4,7 @@ import processing.serial.*; //Librería para poder comunicar Processing con el A
 //Cada NodoEvento es un renglón del historial con su texto y una referencia al siguiente nodo
 class NodoEvento 
 {
-  String textoEvento;   //Guarda la hora y lo que pasó (ej: "[15:20:01] RFID: Se acercó RUFO")
+  String textoEvento;   //Guarda fecha, hora y lo que pasó (ej: "[22/11/2026 15:20:01] RFID: Se acercó RUFO")
   NodoEvento siguiente; //Apunta al próximo nodo de la cadena
   NodoEvento(String texto) 
   {
@@ -25,9 +25,10 @@ class ListaEnlazada
   //Agrega un evento nuevo al principio de la lista (inserción por cabeza)
   void agregarEvento(String descripcion) 
   {
-    //Uso nf(..., 2) para que la hora siempre tenga 2 dígitos (ej: 08:05 en vez de 8:5)
+    //Uso nf(..., 2) para que día, mes y hora siempre tengan 2 dígitos (ej: 22/11/2026 a las 08:05)
+    String fechaActual= nf(day(), 2) + "/" + nf(month(), 2) + "/" + year();
     String horaActual= nf(hour(), 2) + ":" + nf(minute(), 2) + ":" + nf(second(), 2);
-    String registroCompleto= "[" + horaActual + "] " + descripcion;
+    String registroCompleto= "[" + fechaActual + " " + horaActual + "] " + descripcion;
     //Creo el nodo nuevo y lo engancho adelante de la cabeza anterior
     NodoEvento nuevoNodo= new NodoEvento(registroCompleto);
     nuevoNodo.siguiente= cabeza;
@@ -352,13 +353,12 @@ void dibujarColumnaCentral()
   fill(170);
   text("(Click = 45 seg)", 650, 565);
 }
-//Funcion para dibujar una gota de agua uniendo un triángulo arriba, un círculo abajo y un brillito
+//Funcion para dibujar una gota de agua con curva de Bézier para que se vea más natural sin cortes
 void dibujarGotaAgua(float x, float y, float escala, color colorGota, boolean esBoton) 
 {
   pushMatrix();
   translate(x, y);
   scale(escala);
-
   //Si es el botón manual, le agrego el círculo contenedor alrededor para diferenciarlo del indicador
   if ( esBoton == true ) 
   {
@@ -369,12 +369,17 @@ void dibujarGotaAgua(float x, float y, float escala, color colorGota, boolean es
   }
   noStroke();
   fill(colorGota);
-  triangle(0, -36, -23, 6, 23, 6); //Punta de la gota
-  ellipse(0, 10, 48, 48);         //Cuerpo redondo
+  //Dibujo la gota en un solo trazo continuo para que la punta se funda suave con la parte redonda
+  beginShape();
+  vertex(0, -34); //Punta superior de la gota
+  bezierVertex(14, -14, 24, 1, 24, 13);
+  bezierVertex(24, 27, 13, 36, 0, 36);
+  bezierVertex(-13, 36, -24, 27, -24, 13);
+  bezierVertex(-24, 1, -14, -14, 0, -34);
+  endShape(CLOSE);
   //Pequeño reflejo blanco semitransparente para darle volumen
   fill(255, 110);
-  ellipse(-9, 12, 10, 18);
-
+  ellipse(-9, 13, 9, 17);
   popMatrix();
 }
 //Funcion para la columna derecha (Lista Enlazada en RAM + consola desplegable)
@@ -430,14 +435,14 @@ void dibujarColumnaHistorial()
     rect(790, 185, 310, 390, 8);
     fill(120, 255, 160); //Letras verdes
     textAlign(LEFT, TOP);
-    textSize(12);
+    textSize(11); //Tamaño 11 para que entre bien la fecha dd/mm/aaaa y la hora sin pasarse del borde
     //Recorro la Lista Enlazada desde la cabeza hasta mostrar un máximo de 16 líneas para que no se salga
     NodoEvento actual= historialEventos.cabeza;
     int posY= 198;
     int contadorMostrados= 0;
     while ( actual != null && contadorMostrados < 16 ) 
     {
-      text(actual.textoEvento, 802, posY);
+      text(actual.textoEvento, 800, posY);
       posY= posY + 23;
       actual= actual.siguiente;
       contadorMostrados= contadorMostrados + 1;
@@ -511,7 +516,6 @@ void serialEvent(Serial miPuerto)
       estadoTolvaA= int(datos[4]);
       estadoTolvaB= int(datos[5]);
       estadoBomba= int(datos[6]);
-
       //Apenas actualizo los datos, me fijo si hubo algún cambio para anotarlo en el historial
       verificarNuevosEventos();
     }
@@ -573,4 +577,4 @@ void keyPressed()
     verificarNuevosEventos();
   }
 }
-//Me falta hacer: Guardar y cargar el historial en un archivo TXT, y calibrar el umbral de 18/22 cm a las medidas reales de la maqueta
+//Me falta hacer: Guardar y cargar el historial en un archivo TXT, y calibrar el umbral de 18/22 cm a las medidas reales de la maqueta  (que la estoy haciendo)
