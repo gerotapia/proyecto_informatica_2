@@ -1,5 +1,6 @@
 //PROYECTO FINAL INTEGRADOR: SIEMF
 //PINES ASIGNADOS HASTA EL MOMENTO:
+//- D0, D1: USB Serie con la PC
 //- D3:  Servomotor 1 PWM - Compuerta Tolva A (Dieta Común)
 //- D4:  Pin Echo - Sensor Ultrasónico 2 (Tolva B)
 //- D5:  Servomotor 2 PWM - Compuerta Tolva B (Dieta Especial)
@@ -8,23 +9,36 @@
 //- D8:  Pin Trig - Sensor Ultrasónico 2 (Tolva B)
 //- A2:  LED Verde (Hay comida disponible)
 //- A3:  LED Rojo  (Alerta tolva vacía)
-#include <Servo.h>//Librería para manejar los servomotores
-//Jerarquía de sensores(clase padre y priemra clase hija)
+//- D9:  RST del RFID
+//- D10: SDA (SS) del RFID
+//- D11: MOSI del RFID (SPI)
+//- D12: MISO del RFID (SPI)
+//- D13: SCK del RFID (SPI)
+//- A0: Señal del sensor PIR
+//- A1: Relé de la minibomba de agua
+#include <SPI.h>     //Bus SPI para comunicar el Arduino con el lector RFID
+#include <MFRC522.h> //Librería del lector RC522
+#include <Servo.h>   //Librería para manejar los servos SG90
+//Clases de sensores
+//Clase padre: Agrupa lo que tienen en común todos los sensores (un valor y su unidad)
 class Sensor 
 {
-  protected: 
+  protected: //Uso protected para que las clases hijas puedan modificar 'valor' directo
     float valor;
     String magnitud;
   public:
+    //Cuando nace cualquier sensor, le guardo la unidad y arranco su valor en 0
     Sensor(String mag) 
     {
       magnitud= mag;
       valor= 0.0;
     }
+    //Virtual para que cada hijo escriba su propia lógica de lectura física
     virtual void generarMedicion() 
     {
       valor= 0.0;
     }
+    //Getter para consultar el último dato leído sin tocar la variable desde afuera
     float leerMedicion() 
     {
       return valor;
@@ -34,14 +48,15 @@ class Sensor
       return magnitud;
     }
 };
-//Hija 1: Sensor de Ultrasonido(HC-SR04)
+//Clase de sensor ultrasónico HC-SR04 para medir qué tan vacía está cada tolva
 class SensorUltrasonido : public Sensor 
 {
   private:
-    int pinTrig;
-    int pinEcho;
-    float distanciaAlarma;
+    int pinTrig;           //Pin que manda el pulso ultrasónico
+    int pinEcho;           //Pin que mide cuánto tarda en volver el rebote
+    float distanciaAlarma; //Distancia máxima antes de avisar que falta comida
   public:
+    //Llamo al constructor del padre pasándole "cm" y configuro los pines
     SensorUltrasonido(int trig, int echo, float distAlarma) : Sensor("cm") 
     {
       pinTrig= trig;
@@ -50,29 +65,180 @@ class SensorUltrasonido : public Sensor
       pinMode(pinTrig, OUTPUT);
       pinMode(pinEcho, INPUT);
     }
+    //Todavía toma el valor crudo directo del sensor.
+    //Más adelante tengo que meterle un promedio móvil para estabilizar los rebotes en el alimento.
     void generarMedicion() override 
     {
+      //Disparo el pulso de 10 microsegundos que pide la hoja de datos del HC-SR04
       digitalWrite(pinTrig, LOW);
       delayMicroseconds(2);
       digitalWrite(pinTrig, HIGH);
       delayMicroseconds(10);
       digitalWrite(pinTrig, LOW);
+      //Le pongo un timeout de 30000 us (30ms) para que si no vuelve eco no me cuelgue el programa
       long duracion= pulseIn(pinEcho, HIGH, 30000);
       if ( duracion > 0 ) 
       {
+        //Velocidad del sonido aprox 0.034 cm/us; divido por 2 porque la onda va y vuelve
         valor= duracion * 0.034 / 2.0;
       } 
       else 
       {
-        valor= 0.0;
+        valor= 0.0; //Si no recibió rebote, dejo 0
       }
     }
+    //Me devuelve true si la distancia medida superó el límite de la tolva
     bool tolvaVacia() 
     {
       return ( valor > distanciaAlarma );
     }
 };
-//Clases de actuadores(Leds Y Tolvas)
+//Clase sensor infrarrojo PIR para detectar cuando un gato se acerca al bebedero
+class SensorPIR : public Sensor 
+{
+  private:
+    int pinDatos;
+  public:
+    SensorPIR(int pin) : Sensor("Presencia") 
+    {
+      pinDatos= pin;
+      pinMode(pinDatos, INPUT);
+    }
+    //Lee directamente el pin digital: 1 si detectó movimiento, 0 si no hay nadie
+    void generarMedicion() override 
+    {
+      valor= digitalRead(pinDatos);
+    }
+    //Para que los if del loop se lean más claros
+    bool hayGatoCerca() 
+    {
+      return ( valor == 1.0 );
+    }
+};
+//Clase lector RFID RC522 para distinguir a Rufo de Rubia y Pelusa
+class SensorRFID : public Sensor 
+{
+  private:
+    MFRC522 lectorFisico;// Objeto interno de la librería que controla el hardware del lector
+    //UIDs reales (en hexa) que saqué probando mis 3 llaveros antes
+    const byte uidRufo[4]= {0xE3, 0x20, 0x4C, 0x06};   //ID 1 -> Rufo (dieta especial)
+    const byte uidRubia[4]= {0x54, 0xA0, 0x9F, 0xDA};  //ID 2 -> Rubia (comida común)
+    const byte uidPelusa[4]= {0x54, 0xAF, 0x8C, 0xDA}; //ID 3 -> Pelusa (comida común)
+    //Recorre los 4 bytes del llavero leído y los compara con uno de los arrays de arriba
+    bool compararUID(const byte uidLeido[], const byte uidEsperado[]) 
+    {
+      for (byte i= 0; i < 4; i++) 
+      {
+        if ( uidLeido[i] != uidEsperado[i] ) 
+        {
+          return false; //Con que un solo byte sea distinto ya descarto ese gato
+        }
+      }
+      return true;
+    }
+  public:
+    //Inicializo lectorFisico en la lista de inicialización porque necesita SS y RST al crearse
+    SensorRFID(int pinSS, int pinRST) : Sensor("ID_Gato"), lectorFisico(pinSS, pinRST) 
+    {
+      valor= 0.0; //Arranca en 0 (ningún gato detectado)
+    }
+    //Esto lo llamo recién en setup() para arrancar SPI y el chip RC522 de forma segura
+    void inicializar() 
+    {
+      SPI.begin();
+      lectorFisico.PCD_Init();
+    }
+    //Revisa si acercaron un llavero y guarda qué número de gato corresponde
+    void generarMedicion() override 
+    {
+      //Si hay una tarjeta cerca Y se pudo leer su código sin error:
+      if ( lectorFisico.PICC_IsNewCardPresent() && lectorFisico.PICC_ReadCardSerial() ) 
+      {
+        if ( compararUID(lectorFisico.uid.uidByte, uidRufo) ) 
+        {
+          valor= 1.0; //Rufo
+        } 
+        else if ( compararUID(lectorFisico.uid.uidByte, uidRubia) ) 
+        {
+          valor= 2.0; //Rubia
+        } 
+        else if ( compararUID(lectorFisico.uid.uidByte, uidPelusa) ) 
+        {
+          valor= 3.0; //Pelusa
+        } 
+        else 
+        {
+          valor= 0.0; //Cualquier otra tarjeta/SUBE que acerquen se ignora
+        }
+        //Cierro la lectura de esta tarjeta para que el módulo quede libre para la próxima
+        lectorFisico.PICC_HaltA();
+        lectorFisico.PCD_StopCrypto1();
+      }
+    }
+    //Sirve cuando aprieto un botón manual en Processing: le inyecto el ID como si hubiera pasado el gato
+    void forzarGatoDesdePC(int idGato) 
+    {
+      valor= idGato;
+    }
+    //Reseteo a 0 apenas termino de abrir la tolva, así no la intenta abrir mil veces por segundo
+    void limpiarLectura() 
+    {
+      valor= 0.0;
+    }
+};
+//CLASE TIMER (Para sacar el delay() y manejar varios tiempos a la vez)
+//Cada Timer funciona como un cronómetro independiente usando el reloj interno millis()
+class Timer 
+{
+  private:
+    unsigned long tiempoInicio;    //En qué milisegundo empezó a contar
+    unsigned long tiempoAcumulado; //Por si lo freno y quiero saber cuánto llevó
+    bool estaCorriendo;            //Si está contando o parado
+  public:
+    Timer() 
+    {
+      tiempoInicio= 0;
+      tiempoAcumulado= 0;
+      estaCorriendo= false;
+    }
+    void iniciar() 
+    {
+      if ( !estaCorriendo ) 
+      {
+        tiempoInicio= millis() - tiempoAcumulado;
+        estaCorriendo= true;
+      }
+    }
+    void detener() 
+    {
+      if ( estaCorriendo ) 
+      {
+        tiempoAcumulado= millis() - tiempoInicio;
+        estaCorriendo= false;
+      }
+    }
+    //Lo pone en 0 y arranca al toque (lo uso cada vez que se dispara una tolva, el agua o un reporte)
+    void reiniciarYArrancar() 
+    {
+      tiempoAcumulado= 0;
+      tiempoInicio= millis();
+      estaCorriendo= true;
+    }
+    //Devuelve cuántos milisegundos pasaron desde que arrancó este timer
+    unsigned long obtenerTiempo() 
+    {
+      if ( estaCorriendo ) 
+      {
+        return millis() - tiempoInicio;
+      } 
+      else 
+      {
+        return tiempoAcumulado;
+      }
+    }
+};
+//Clases de Sensores (LEDs, Servos de las Tolvas y Bomba de agua)
+//Control básico de un LED (encendido o apagado)
 class Led 
 {
   private:
@@ -84,7 +250,7 @@ class Led
       pin= p;
       estado= false;
       pinMode(pin, OUTPUT);
-      digitalWrite(pin, LOW);
+      digitalWrite(pin, LOW); //Siempre arranca apagado
     }
     void encender() 
     {
@@ -97,14 +263,15 @@ class Led
       digitalWrite(pin, LOW);
     }
 };
+//Maneja la compuerta de cada tolva con su servomotor
 class Tolva 
 {
   private:
     Servo motorServo;
     int pinServo;
-    int anguloCerrado;
-    int anguloAbierto;
-    bool estaAbierta;
+    int anguloCerrado; //Posición donde frena el alimento (0°)
+    int anguloAbierto; //Posición donde deja caer la porción (90°)
+    bool estaAbierta;  //Bandera para saber si ya está abierta y no mandarle órdenes repetidas
   public:
     Tolva(int pin, int angCerrado, int angAbierto) 
     {
@@ -113,6 +280,7 @@ class Tolva
       anguloAbierto= angAbierto;
       estaAbierta= false;
     }
+    //El attach() va en setup() y cierro de entrada para que no tire comida al enchufar el Arduino
     void inicializar() 
     {
       motorServo.attach(pinServo);
@@ -136,44 +304,168 @@ class Tolva
       return estaAbierta;
     }
 };
-//Instanciación de objetos globales
-//Usé una medida provisoria, la medida final dependerá de cómo quede armada la maqueta
-SensorUltrasonido ultrasonidoNormal(6, 7, 18.0);   
-SensorUltrasonido ultrasonidoEspecial(8, 4, 18.0); 
-Tolva tolvaNormal(3, 0, 90);                       
-Tolva tolvaEspecial(5, 0, 90);                     
-Led ledVerde(A2);                                  
-Led ledRojo(A3);                                   
-//Setup
+//Maneja el relé que enciende/apaga la minibomba sumergible del bebedero
+class BombaAgua 
+{
+  private:
+    int pinRele;
+    bool encendida;
+  public:
+    BombaAgua(int pin) 
+    {
+      pinRele= pin;
+      encendida= false;
+      pinMode(pinRele, OUTPUT);
+      digitalWrite(pinRele, LOW); // Arranca cortada
+    }
+    void activar() 
+    {
+      encendida= true;
+      digitalWrite(pinRele, HIGH);
+    }
+    void desactivar() 
+    {
+      encendida= false;
+      digitalWrite(pinRele, LOW);
+    }
+    bool estaActiva() 
+    {
+      return encendida;
+    }
+};
+//Instansiación de todos los objetos del sistema
+//Dejo 18.0 cm de umbral por ahora hasta medir bien las tolvas físicas terminadas
+SensorUltrasonido ultrasonidoNormal(6, 7, 18.0);   //Tolva A: Trig D6, Echo D7
+SensorUltrasonido ultrasonidoEspecial(8, 4, 18.0); //Tolva B: Trig D8, Echo D4
+SensorPIR sensorPresenciaAgua(A0); //PIR en A0
+SensorRFID lectorCollar(10, 9);    //RFID: SS en D10, RST en D9
+Tolva tolvaNormal(3, 0, 90);       //Servo Tolva A en D3 (0° cerrada, 90° abierta)
+Tolva tolvaEspecial(5, 0, 90);     //Servo Tolva B en D5 (0° cerrada, 90° abierta)
+BombaAgua fuenteAgua(A1);          //Relé de la bomba en A1
+Led ledVerde(A2);                  //Verde en A2
+Led ledRojo(A3);                   //Rojo en A3
+//Creo 4 cronómetros separados para que ninguna espera frene a otra
+Timer timerTolvaNormal;
+Timer timerTolvaEspecial;
+Timer timerFuenteAgua;
+Timer timerReporteSerial;
+//Tiempos de operación en milisegundos
+const unsigned long TIEMPO_DISPENSADO= 3000; //3 segundos de comida por ración
+const unsigned long TIEMPO_AGUA= 45000;      //45 segundos corriendo la cascada
+const unsigned long TIEMPO_REPORTE= 500;     //Mando datos a Processing cada medio segundo
+//Guardo aparte el último gato que pasó para seguir mostrándolo en la PC aunque ya se haya ido
+int ultimoGatoRegistrado= 0;
+//SETUP
 void setup() 
 {
-  Serial.begin(9600);
-  tolvaNormal.inicializar();
-  tolvaEspecial.inicializar();
-  Serial.println("SIEMF v0.3 - Prueba inicial de sensores y tolvas");
+  Serial.begin(9600);           //Misma velocidad que uso en Processing
+  lectorCollar.inicializar();   //Arranco SPI y lector RC522
+  tolvaNormal.inicializar();    //Conecto servo A cerrado
+  tolvaEspecial.inicializar();  //Conecto servo B cerrado
+  timerReporteSerial.reiniciarYArrancar(); //Empiezo a contar para el primer envío Serial
 }
-//Loop(es una prueba inicial y por eso uso delay, luego implementaré Millis)
+//LOOP
 void loop() 
 {
-  //Leemos ambos sensores ultrasónicos
-  ultrasonidoNormal.generarMedicion();
-  ultrasonidoEspecial.generarMedicion();
-  //Control visual básico con LEDs según nivel de comida
-  if ( ultrasonidoNormal.tolvaVacia() || ultrasonidoEspecial.tolvaVacia() ) 
+  //Recibimos comandos manuales desde processing
+  if ( Serial.available() > 0 ) 
   {
-    ledVerde.apagar();
-    ledRojo.encender();
-  } 
-  else 
-  {
-    ledRojo.apagar();
-    ledVerde.encender();
+    char comando= Serial.read();
+    //Si desde la PC piden servir comida común ('A') o especial ('B'), uso el mismo
+    //camino lógico que el RFID para reutilizar los timers de cierre de 3 segundos
+    if ( comando == 'A' || comando == 'a' ) 
+    {
+      lectorCollar.forzarGatoDesdePC(2); //Simulo Rubia -> abre Tolva A
+    } 
+    else if ( comando == 'B' || comando == 'b' ) 
+    {
+      lectorCollar.forzarGatoDesdePC(1); //Simulo Rufo -> abre Tolva B
+    } 
+    else if ( comando == 'W' || comando == 'w' ) 
+    {
+      //'W' prende la cascada de agua y reinicia sus 45 segundos
+      fuenteAgua.activar();
+      timerFuenteAgua.reiniciarYArrancar();
+    }
   }
-  //Impresión básica por Monitor Serie para verificar distancias
-  Serial.print("Tolva A: ");
-  Serial.print(ultrasonidoNormal.leerMedicion());
-  Serial.print(" cm | Tolva B: ");
-  Serial.print(ultrasonidoEspecial.leerMedicion());
-  Serial.println(" cm");
-  delay(500); //Temporal - reemplazar con millis()
+  //Chequear collar RFID y abrir la tola que corresponde
+  lectorCollar.generarMedicion();
+  int gatoDetectado= (int)lectorCollar.leerMedicion();
+  if ( gatoDetectado > 0 ) 
+  {
+    ultimoGatoRegistrado= gatoDetectado; //Actualizo quién fue el último para la pantalla
+    //Si es Rufo (1) le abro únicamente la Tolva B(dieta especial)
+    if ( gatoDetectado == 1 && !tolvaEspecial.abierta() ) 
+    {
+      tolvaEspecial.abrir();
+      timerTolvaEspecial.reiniciarYArrancar();
+    }
+    //Si es Rubia (2) o Pelusa (3) les abro la Tolva A (dieta común)
+    else if ( (gatoDetectado == 2 || gatoDetectado == 3) && !tolvaNormal.abierta() ) 
+    {
+      tolvaNormal.abrir();
+      timerTolvaNormal.reiniciarYArrancar();
+    }
+    //Limpio el valor del RFID así no vuelve a entrar acá en la próxima iteración del loop
+    lectorCollar.limpiarLectura();
+  }
+  //Cerramos las compuertas cuando pasaron 3 segundos
+  if ( tolvaNormal.abierta() && timerTolvaNormal.obtenerTiempo() >= TIEMPO_DISPENSADO ) 
+  {
+    tolvaNormal.cerrar();
+    timerTolvaNormal.detener();
+  }
+  if ( tolvaEspecial.abierta() && timerTolvaEspecial.obtenerTiempo() >= TIEMPO_DISPENSADO ) 
+  {
+    tolvaEspecial.cerrar();
+    timerTolvaEspecial.detener();
+  }
+  //Control del bebedero con el sensor PIR
+  sensorPresenciaAgua.generarMedicion();
+  //Si detecta movimiento y la bomba estaba apagada, la prendo y arranco la cuenta de 45s
+  if ( sensorPresenciaAgua.hayGatoCerca() && !fuenteAgua.estaActiva() ) 
+  {
+    fuenteAgua.activar();
+    timerFuenteAgua.reiniciarYArrancar();
+  }
+  //Cuando pasan los 45 segundos la apago sola
+  if ( fuenteAgua.estaActiva() && timerFuenteAgua.obtenerTiempo() >= TIEMPO_AGUA ) 
+  {
+    fuenteAgua.desactivar();
+    timerFuenteAgua.detener();
+  }
+  //cada 500ms medimos las tolvs, actualizamos leds y mandamos la trama a la PC
+  if ( timerReporteSerial.obtenerTiempo() >= TIEMPO_REPORTE ) 
+  {
+    timerReporteSerial.reiniciarYArrancar();
+    //Actualizo las dos distancias
+    ultrasonidoNormal.generarMedicion();
+    ultrasonidoEspecial.generarMedicion();
+    //Alerta visual básica por ahora (en la próxima versión sumo el buzzer y el parpadeo)
+    if ( ultrasonidoNormal.tolvaVacia() || ultrasonidoEspecial.tolvaVacia() ) 
+    {
+      ledVerde.apagar();
+      ledRojo.encender();
+    } 
+    else 
+    {
+      ledRojo.apagar();
+      ledVerde.encender();
+    }
+    //Mando los 7 valores separados por comas y un println al final para que Processing los corte fácil:
+    //distA,distB,ultimoGato,pir,tolvaA,tolvaB,bomba
+    Serial.print(ultrasonidoNormal.leerMedicion());
+    Serial.print(",");
+    Serial.print(ultrasonidoEspecial.leerMedicion());
+    Serial.print(",");
+    Serial.print(ultimoGatoRegistrado);
+    Serial.print(",");
+    Serial.print((int)sensorPresenciaAgua.leerMedicion());
+    Serial.print(",");
+    Serial.print(tolvaNormal.abierta() ? 1 : 0);
+    Serial.print(",");
+    Serial.print(tolvaEspecial.abierta() ? 1 : 0);
+    Serial.print(",");
+    Serial.println(fuenteAgua.estaActiva() ? 1 : 0);
+  }
 }
