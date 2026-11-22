@@ -13,7 +13,7 @@ Las conexiones sobre **Arduino UNO** (sin usar `D0` y `D1` para mantener libre e
 * **Indicadores LED:** LED Verde en **Pin Analógico A2** y LED Rojo en **Pin Analógico A3**.
 
 ### Lógica de Comunicación:
-El intercambio de información entre la placa y la PC se realiza por puerto Serie mediante programación orientada a objetos y multitarea con `millis()` (clase `Timer`):
+El intercambio de información entre la placa y la PC se realiza por puerto Serie mediante programación orientada a objetos y multitarea con millis() (clase `Timer`):
 
 * **De Arduino a PC:**
 Cada `500 ms`, el Arduino envía una trama de texto con **7 valores numéricos separados por comas**
