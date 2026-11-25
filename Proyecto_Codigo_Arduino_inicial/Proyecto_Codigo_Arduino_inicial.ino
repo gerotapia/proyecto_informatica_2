@@ -49,14 +49,21 @@ class Sensor
     }
 };
 //Clase de sensor ultrasónico HC-SR04 para medir qué tan vacía está cada tolva
+//Ahora incluye un filtro de media móvil de 5 muestras para limpiar picos de ruido
+//Esto corresponde al calculo numerico que se solicita
 class SensorUltrasonido : public Sensor 
 {
   private:
     int pinTrig;           //Pin que manda el pulso ultrasónico
     int pinEcho;           //Pin que mide cuánto tarda en volver el rebote
     float distanciaAlarma; //Distancia máxima antes de avisar que falta comida
+    //Variables del filtro de media móvil (buffer circular de 5 posiciones)
+    //Lo agregué porque el ultrasonido a veces tira saltos raros cuando la onda rebota en las croquetas de comida
+    float historial[5];    //Arreglo donde voy guardando las últimas 5 lecturas crudas
+    int indice;            //Me dice en qué posición del arreglo toca pisar el dato más viejo
+    float suma;            //Llevo la suma acumulada de las 5 muestras para no recorrer todo en un for cada vez
   public:
-    //Llamo al constructor del padre pasándole "cm" y configuro los pines
+    //Llamo al constructor del padre pasándole "cm", configuro los pines e inicializo el filtro en 0
     SensorUltrasonido(int trig, int echo, float distAlarma) : Sensor("cm") 
     {
       pinTrig= trig;
@@ -64,12 +71,18 @@ class SensorUltrasonido : public Sensor
       distanciaAlarma= distAlarma;
       pinMode(pinTrig, OUTPUT);
       pinMode(pinEcho, INPUT);
+      indice= 0;
+      suma= 0.0;
+      //Limpio las 5 posiciones del arreglo en 0.0 para no arrancar promediando basura de memoria
+      for (int i= 0; i < 5; i++) 
+      {
+        historial[i]= 0.0;
+      }
     }
-    //Todavía toma el valor crudo directo del sensor.
-    //Más adelante tengo que meterle un promedio móvil para estabilizar los rebotes en el alimento.
+    //Toma la lectura física del HC-SR04 y la pasa por el filtro de media móvil antes de guardarla en 'valor'
     void generarMedicion() override 
     {
-      //Disparo el pulso de 10 microsegundos que pide la hoja de datos del HC-SR04
+      //1) Disparo el pulso de 10 microsegundos que pide la hoja de datos del HC-SR04
       digitalWrite(pinTrig, LOW);
       delayMicroseconds(2);
       digitalWrite(pinTrig, HIGH);
@@ -77,17 +90,26 @@ class SensorUltrasonido : public Sensor
       digitalWrite(pinTrig, LOW);
       //Le pongo un timeout de 30000 us (30ms) para que si no vuelve eco no me cuelgue el programa
       long duracion= pulseIn(pinEcho, HIGH, 30000);
+      float lecturaCruda= 0.0;
       if ( duracion > 0 ) 
       {
         //Velocidad del sonido aprox 0.034 cm/us; divido por 2 porque la onda va y vuelve
-        valor= duracion * 0.034 / 2.0;
-      } 
-      else 
-      {
-        valor= 0.0; //Si no recibió rebote, dejo 0
+        lecturaCruda= duracion * 0.034 / 2.0;
       }
+      //2) Aplico el filtro de media móvil (buffer circular)
+      suma= suma - historial[indice];  //Resto del total la lectura más vieja que voy a reemplazar
+      historial[indice]= lecturaCruda; //Guardo la medición recién tomada en ese casillero
+      suma= suma + historial[indice];  //Sumo el dato nuevo al acumulado
+      //Avanzo el índice al siguiente casillero; si llegué al final (5), doy la vuelta a 0
+      indice= indice + 1;
+      if( indice >= 5 ) 
+      {
+        indice= 0;
+      }
+      //3) Guardo el promedio final en 'valor' (la variable heredada de Sensor)
+      valor= suma / 5.0;
     }
-    //Me devuelve true si la distancia medida superó el límite de la tolva
+    //Me devuelve true si la distancia filtrada superó el límite real de la tolva (21.0 cm)
     bool tolvaVacia() 
     {
       return ( valor > distanciaAlarma );
@@ -237,7 +259,7 @@ class Timer
       }
     }
 };
-//Clases de Sensores (LEDs, Servos de las Tolvas y Bomba de agua)
+//Clases de Actuadores (LEDs, Servos de las Tolvas y Bomba de agua)
 //Control básico de un LED (encendido o apagado)
 class Led 
 {
@@ -333,10 +355,12 @@ class BombaAgua
       return encendida;
     }
 };
-//Instansiación de todos los objetos del sistema
-//Dejo 18.0 cm de umbral por ahora hasta medir bien las tolvas físicas terminadas
-SensorUltrasonido ultrasonidoNormal(6, 7, 18.0);   //Tolva A: Trig D6, Echo D7
-SensorUltrasonido ultrasonidoEspecial(8, 4, 18.0); //Tolva B: Trig D8, Echo D4
+//Instanciación de todos los objetos del sistema
+//Calibración real de las tolvas a 21.0 cm:
+//Dejo 3 cm arriba por el punto ciego del sensor ultrasonico + 18 cm de depósito recto = 21.0 cm.
+//Los últimos 4 cm son el embudo inferior, así que al pasar los 21.0 cm ya avisa tolva vacía (queda una pequeña reserva)
+SensorUltrasonido ultrasonidoNormal(6, 7, 21.0);   //Tolva A: Trig D6, Echo D7
+SensorUltrasonido ultrasonidoEspecial(8, 4, 21.0); //Tolva B: Trig D8, Echo D4
 SensorPIR sensorPresenciaAgua(A0); //PIR en A0
 SensorRFID lectorCollar(10, 9);    //RFID: SS en D10, RST en D9
 Tolva tolvaNormal(3, 0, 90);       //Servo Tolva A en D3 (0° cerrada, 90° abierta)
@@ -388,7 +412,7 @@ void loop()
       timerFuenteAgua.reiniciarYArrancar();
     }
   }
-  //Chequear collar RFID y abrir la tola que corresponde
+  //Chequear collar RFID y abrir la tolva que corresponde
   lectorCollar.generarMedicion();
   int gatoDetectado= (int)lectorCollar.leerMedicion();
   if ( gatoDetectado > 0 ) 
@@ -434,11 +458,11 @@ void loop()
     fuenteAgua.desactivar();
     timerFuenteAgua.detener();
   }
-  //cada 500ms medimos las tolvs, actualizamos leds y mandamos la trama a la PC
+  //Cada 500ms medimos las tolvas (ya con filtro de media móvil), actualizamos leds y mandamos la trama a la PC
   if ( timerReporteSerial.obtenerTiempo() >= TIEMPO_REPORTE ) 
   {
     timerReporteSerial.reiniciarYArrancar();
-    //Actualizo las dos distancias
+    //Actualizo las dos distancias filtradas
     ultrasonidoNormal.generarMedicion();
     ultrasonidoEspecial.generarMedicion();
     //Alerta visual básica por ahora (en la próxima versión sumo el buzzer y el parpadeo)
