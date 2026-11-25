@@ -142,10 +142,11 @@ void dibujarColumnaAlimentacion()
   textAlign(CENTER, CENTER);
   textSize(20);
   text("Control de Tolvas", 205, 135);
-  //Cálculo de porcentaje (3 cm = 100% | 22 cm = 0%)
+  //Cálculo de porcentaje útil ya calibrado a las tolvas reales (3.0 cm = 100% | 21.0 cm = 0%)
+  //Dejé 3 cm arriba por el punto ciego del HC-SR04 y 21 cm donde empieza el embudo de reserva
   //Uso constrain para que el porcentaje nunca se pase de 0 ni de 100 si el sensor mide de más o de menos
-  float porcentajeA= constrain(map(distanciaTolvaA, 22.0, 3.0, 0, 100), 0, 100);
-  float porcentajeB= constrain(map(distanciaTolvaB, 22.0, 3.0, 0, 100), 0, 100);
+  float porcentajeA= constrain(map(distanciaTolvaA, 21.0, 3.0, 0, 100), 0, 100);
+  float porcentajeB= constrain(map(distanciaTolvaB, 21.0, 3.0, 0, 100), 0, 100);
   //Barras de Tolva A y Tolva B junto con el cartel de si la compuerta está abierta o cerrada
   dibujarBarraTolva(65, 185, 95, 210, porcentajeA, distanciaTolvaA, "Tolva A (Común)");
   dibujarEstadoCompuerta(112, 435, estadoTolvaA);
@@ -178,8 +179,8 @@ void dibujarBarraTolva(float x, float y, float ancho, float alto, float porcenta
   strokeWeight(2);
   fill(20, 25, 36);
   rect(x, y, ancho, alto, 10);
-  //Umbral en 18.0 cm (que es la medida inicial, pero puede cambiar cuando arme la tolva real)
-  if ( cm > 18.0 ) 
+  //Umbral calibrado en 21.0 cm (sincronizado con el Arduino para que salte la alerta al mismo tiempo)
+  if ( cm > 21.0 ) 
   {
     fill(255, 71, 87); //Rojo: Alerta
   } 
@@ -196,7 +197,7 @@ void dibujarBarraTolva(float x, float y, float ancho, float alto, float porcenta
   textSize(12);
   fill(200);
   text(nf(cm, 1, 1) + " cm", x + ancho / 2, y + alto / 2 + 15);
-  if ( cm > 18.0 ) 
+  if ( cm > 21.0 ) 
   {
     fill(255, 71, 87);
     textSize(12);
@@ -550,8 +551,8 @@ void verificarNuevosEventos()
     historialEventos.agregarEvento("Bebedero: Cascada ENCENDIDA");
   }
   estadoBombaAnterior= estadoBomba;
-  //Disparo la alerta de falta de comida una sola vez al superar el límite provisorio de 18.0 cm
-  boolean hayAlertaAhora= (distanciaTolvaA > 18.0 || distanciaTolvaB > 18.0);
+  //Disparo la alerta de falta de comida una sola vez al superar el límite calibrado de 21.0 cm
+  boolean hayAlertaAhora= (distanciaTolvaA > 21.0 || distanciaTolvaB > 21.0);
   if ( hayAlertaAhora == true && alertaVacioAnterior == false ) 
   {
     historialEventos.agregarEvento("¡ALERTA! Nivel bajo en tolva");
@@ -567,7 +568,8 @@ void keyPressed()
   if ( key == '3' ) { ultimoGato= 3; estadoTolvaA= 1; verificarNuevosEventos(); }
   if ( key == 'v' || key == 'V' ) 
   {
-    distanciaTolvaA= (distanciaTolvaA > 18.0) ? 6.0 : 20.5;
+    //Alterno entre 6.0 cm (llena) y 22.5 cm (vacía, superando los 21.0 cm calibrados)
+    distanciaTolvaA= (distanciaTolvaA > 21.0) ? 6.0 : 22.5;
     verificarNuevosEventos();
   }
   if ( key == 'p' || key == 'P' ) 
@@ -577,4 +579,4 @@ void keyPressed()
     verificarNuevosEventos();
   }
 }
-//Me falta hacer: Guardar y cargar el historial en un archivo TXT, y calibrar el umbral de 18/22 cm a las medidas reales de la maqueta  (que la estoy haciendo)
+//Me falta hacer: Guardar y cargar el historial en un archivo TXT
