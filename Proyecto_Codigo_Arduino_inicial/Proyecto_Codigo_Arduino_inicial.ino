@@ -1,5 +1,5 @@
 //PROYECTO FINAL INTEGRADOR: SIEMF
-//PINES ASIGNADOS HASTA EL MOMENTO:
+//PINES ASIGNADOS
 //- D0, D1: USB Serie con la PC
 //- D2:  Buzzer (Alarma sonora tolva vacía)
 //- D3:  Servomotor 1 PWM - Compuerta Tolva A (Dieta Común)
@@ -438,6 +438,14 @@ void setup()
   lectorCollar.inicializar();   //Arranco SPI y lector RC522
   tolvaNormal.inicializar();    //Conecto servo A cerrado
   tolvaEspecial.inicializar();  //Conecto servo B cerrado
+  //Precargo las 5 muestras iniciales del filtro de media móvil antes de entrar al loop
+  //Así la primera trama que llega a Processing ya muestra el nivel real y no arranca desde 0.0 cm
+  for (int i= 0; i < 5; i++) 
+  {
+    ultrasonidoNormal.generarMedicion();
+    ultrasonidoEspecial.generarMedicion();
+    delay(30); //Pequeña pausa solo en el encendido para evitar eco cruzado entre disparos
+  }
   timerReporteSerial.reiniciarYArrancar(); //Empiezo a contar para el primer envío Serial
 }
 //LOOP
