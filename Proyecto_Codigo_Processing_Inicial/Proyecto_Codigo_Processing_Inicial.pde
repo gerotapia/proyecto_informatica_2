@@ -110,24 +110,38 @@ void dibujarEncabezado()
   noStroke();
   fill(16, 20, 30);
   rect(0, 0, width, 85);
-  stroke(0, 210, 211);
+  //Chequeo si hay alguna tolva vacía (> 21.0 cm) para destacar también la barra superior en rojo
+  boolean hayAlertaAlimento= (distanciaTolvaA > 21.0 || distanciaTolvaB > 21.0);
+  if ( hayAlertaAlimento == true ) 
+  {
+    stroke(255, 71, 87); //Línea roja cuando falta comida
+  } 
+  else 
+  {
+    stroke(0, 210, 211); //Línea turquesa en funcionamiento normal
+  }
   strokeWeight(3);
   line(350, 75, width - 350, 75);
   fill(255);
   textAlign(CENTER, CENTER);
   textSize(34);
   text("Panel de control", width / 2, 32);
-  //Subtítulo dinámico: avisa en verde si está conectado el Arduino o en naranja si estoy simulando
+  //Subtítulo dinámico: prioriza el aviso de falta de alimento; si está todo bien muestra el estado del Arduino
   textSize(13);
-  if ( arduinoConectado == true ) 
+  if ( hayAlertaAlimento == true ) 
+  {
+    fill(255, 71, 87);
+    text("¡ALERTA! Nivel bajo de alimento en tolva - Reponer comida", width / 2, 60);
+  } 
+  else if ( arduinoConectado == true ) 
   {
     fill(46, 213, 115);
-    text("SIEMF - En línea con Arduino UNO", width / 2, 60);
+    text("En línea con Arduino UNO", width / 2, 60);
   } 
   else 
   {
     fill(255, 165, 2);
-    text("SIEMF - Modo Prueba sin placa (Teclas 1, 2, 3, V, P para simular)", width / 2, 60);
+    text("Modo Prueba sin placa (Teclas 1, 2, 3, V, P para simular)", width / 2, 60);
   }
 }
 //Funcion para dibujar la columna izquierda con las barras de nivel y los botones con forma de patita
@@ -320,7 +334,7 @@ void dibujarColumnaCentral()
   {
     fill(46, 213, 115);
     textSize(14);
-    text("Sensor PIR: ¡GATO EN EL AGUA!", 575, 342);
+    text("Sensor PIR: ¡GATO TOMANDO AGUA!", 575, 342);
   } 
   else 
   {
@@ -434,14 +448,22 @@ void dibujarColumnaHistorial()
     stroke(60, 80, 110);
     fill(14, 18, 26);
     rect(790, 185, 310, 390, 8);
+    //Encabezado interno de la consola para ver en vivo cuántos nodos hay cargados en la Lista Enlazada
+    noStroke();
+    fill(24, 32, 48);
+    rect(791, 186, 308, 24, 7, 7, 0, 0);
+    fill(0, 210, 211);
+    textAlign(LEFT, CENTER);
+    textSize(11);
+    text("REGISTRO EN VIVO | Total en RAM: " + historialEventos.cantidadNodos, 800, 198);
     fill(120, 255, 160); //Letras verdes
     textAlign(LEFT, TOP);
     textSize(11); //Tamaño 11 para que entre bien la fecha dd/mm/aaaa y la hora sin pasarse del borde
-    //Recorro la Lista Enlazada desde la cabeza hasta mostrar un máximo de 16 líneas para que no se salga
+    //Recorro la Lista Enlazada desde la cabeza hasta mostrar un máximo de 15 líneas debajo del encabezado
     NodoEvento actual= historialEventos.cabeza;
-    int posY= 198;
+    int posY= 218;
     int contadorMostrados= 0;
-    while ( actual != null && contadorMostrados < 16 ) 
+    while ( actual != null && contadorMostrados < 15 ) 
     {
       text(actual.textoEvento, 800, posY);
       posY= posY + 23;
