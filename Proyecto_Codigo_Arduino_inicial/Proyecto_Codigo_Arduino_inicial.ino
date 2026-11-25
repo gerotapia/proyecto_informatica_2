@@ -1,6 +1,7 @@
 //PROYECTO FINAL INTEGRADOR: SIEMF
 //PINES ASIGNADOS HASTA EL MOMENTO:
 //- D0, D1: USB Serie con la PC
+//- D2:  Buzzer (Alarma sonora tolva vacía)
 //- D3:  Servomotor 1 PWM - Compuerta Tolva A (Dieta Común)
 //- D4:  Pin Echo - Sensor Ultrasónico 2 (Tolva B)
 //- D5:  Servomotor 2 PWM - Compuerta Tolva B (Dieta Especial)
@@ -50,7 +51,6 @@ class Sensor
 };
 //Clase de sensor ultrasónico HC-SR04 para medir qué tan vacía está cada tolva
 //Ahora incluye un filtro de media móvil de 5 muestras para limpiar picos de ruido
-//Esto corresponde al calculo numerico que se solicita
 class SensorUltrasonido : public Sensor 
 {
   private:
@@ -58,7 +58,7 @@ class SensorUltrasonido : public Sensor
     int pinEcho;           //Pin que mide cuánto tarda en volver el rebote
     float distanciaAlarma; //Distancia máxima antes de avisar que falta comida
     //Variables del filtro de media móvil (buffer circular de 5 posiciones)
-    //Lo agregué porque el ultrasonido a veces tira saltos raros cuando la onda rebota en las croquetas de comida
+    //Lo agregué porque el ultrasonido a veces tira saltos raros cuando la onda rebota en las croquetas
     float historial[5];    //Arreglo donde voy guardando las últimas 5 lecturas crudas
     int indice;            //Me dice en qué posición del arreglo toca pisar el dato más viejo
     float suma;            //Llevo la suma acumulada de las 5 muestras para no recorrer todo en un for cada vez
@@ -102,7 +102,7 @@ class SensorUltrasonido : public Sensor
       suma= suma + historial[indice];  //Sumo el dato nuevo al acumulado
       //Avanzo el índice al siguiente casillero; si llegué al final (5), doy la vuelta a 0
       indice= indice + 1;
-      if( indice >= 5 ) 
+      if ( indice >= 5 ) 
       {
         indice= 0;
       }
@@ -259,8 +259,8 @@ class Timer
       }
     }
 };
-//Clases de Actuadores (LEDs, Servos de las Tolvas y Bomba de agua)
-//Control básico de un LED (encendido o apagado)
+//Clases de Actuadores (LEDs, Buzzer, Servos de las Tolvas y Bomba de agua)
+//Control básico de un LED (encendido, apagado o parpadeo sin delay)
 class Led 
 {
   private:
@@ -283,6 +283,57 @@ class Led
     {
       estado= false;
       digitalWrite(pin, LOW);
+    }
+    //Invierte el estado actual del LED (si estaba prendido lo apaga y viceversa)
+    //Al llamarlo cada 500ms dentro del ciclo de reporte, logro el parpadeo de alerta sin usar delay()
+    void alternar() 
+    {
+      if ( estado == true ) 
+      {
+        apagar();
+      } 
+      else 
+      {
+        encender();
+      }
+    }
+};
+//Clase para manejar el buzzer de alerta sonora cuando alguna tolva se queda sin alimento
+class Buzzer 
+{
+  private:
+    int pin;
+    bool sonando;
+  public:
+    Buzzer(int p) 
+    {
+      pin= p;
+      sonando= false;
+      pinMode(pin, OUTPUT);
+      noTone(pin); //Me aseguro de que arranque en silencio
+    }
+    //Emite un tono de 1000 Hz (funciona tanto con buzzer pasivo como activo en modo pulso)
+    void encender() 
+    {
+      sonando= true;
+      tone(pin, 1000);
+    }
+    void apagar() 
+    {
+      sonando= false;
+      noTone(pin);
+    }
+    //Alterna entre pitido y silencio cada 500ms para ir sincronizado con el parpadeo del LED rojo
+    void alternar() 
+    {
+      if ( sonando == true ) 
+      {
+        apagar();
+      } 
+      else 
+      {
+        encender();
+      }
     }
 };
 //Maneja la compuerta de cada tolva con su servomotor
@@ -357,8 +408,8 @@ class BombaAgua
 };
 //Instanciación de todos los objetos del sistema
 //Calibración real de las tolvas a 21.0 cm:
-//Dejo 3 cm arriba por el punto ciego del sensor ultrasonico + 18 cm de depósito recto = 21.0 cm.
-//Los últimos 4 cm son el embudo inferior, así que al pasar los 21.0 cm ya avisa tolva vacía (queda una pequeña reserva)
+//Dejo 3 cm arriba por el punto ciego del sensor + 18 cm de depósito recto = 21.0 cm.
+//Los últimos 4 cm son el embudo inferior, así que al pasar los 21.0 cm ya avisa tolva vacía con reserva.
 SensorUltrasonido ultrasonidoNormal(6, 7, 21.0);   //Tolva A: Trig D6, Echo D7
 SensorUltrasonido ultrasonidoEspecial(8, 4, 21.0); //Tolva B: Trig D8, Echo D4
 SensorPIR sensorPresenciaAgua(A0); //PIR en A0
@@ -368,6 +419,7 @@ Tolva tolvaEspecial(5, 0, 90);     //Servo Tolva B en D5 (0° cerrada, 90° abie
 BombaAgua fuenteAgua(A1);          //Relé de la bomba en A1
 Led ledVerde(A2);                  //Verde en A2
 Led ledRojo(A3);                   //Rojo en A3
+Buzzer alarmaSonora(2);            //Buzzer de alarma en D2
 //Creo 4 cronómetros separados para que ninguna espera frene a otra
 Timer timerTolvaNormal;
 Timer timerTolvaEspecial;
@@ -458,22 +510,24 @@ void loop()
     fuenteAgua.desactivar();
     timerFuenteAgua.detener();
   }
-  //Cada 500ms medimos las tolvas (ya con filtro de media móvil), actualizamos leds y mandamos la trama a la PC
+  //Cada 500ms medimos las tolvas (ya con filtro de media móvil), actualizamos alertas y mandamos la trama a la PC
   if ( timerReporteSerial.obtenerTiempo() >= TIEMPO_REPORTE ) 
   {
     timerReporteSerial.reiniciarYArrancar();
     //Actualizo las dos distancias filtradas
     ultrasonidoNormal.generarMedicion();
     ultrasonidoEspecial.generarMedicion();
-    //Alerta visual básica por ahora (en la próxima versión sumo el buzzer y el parpadeo)
+    //Alerta local completa: si alguna tolva supera los 21.0 cm, parpadea el LED rojo y suena el buzzer cada 500ms
     if ( ultrasonidoNormal.tolvaVacia() || ultrasonidoEspecial.tolvaVacia() ) 
     {
       ledVerde.apagar();
-      ledRojo.encender();
+      ledRojo.alternar();      //Parpadeo no bloqueante aprovechando el ciclo de 500ms
+      alarmaSonora.alternar(); //Pitido intermitente sincronizado con el LED rojo
     } 
     else 
     {
       ledRojo.apagar();
+      alarmaSonora.apagar();
       ledVerde.encender();
     }
     //Mando los 7 valores separados por comas y un println al final para que Processing los corte fácil:
