@@ -1,5 +1,6 @@
 //PROYECTO FINAL: SIEMF - INTERFAZ GRÁFICA EN PROCESSING
 import processing.serial.*; //Librería para poder comunicar Processing con el Arduino por USB
+import java.io.File;        //Importo solo File para verificar si existe el archivo .txt sin chocar con Serial
 //Estructura de la Lista Enlazada simple (para ir guardando el historial de eventos en la RAM)
 //Cada NodoEvento es un renglón del historial con su texto y una referencia al siguiente nodo
 class NodoEvento 
@@ -34,6 +35,60 @@ class ListaEnlazada
     nuevoNodo.siguiente= cabeza;
     cabeza= nuevoNodo;
     cantidadNodos= cantidadNodos + 1;
+  }
+  //Inserta una línea tal cual viene del archivo .txt (sin volver a pegarle otra fecha/hora encima)
+  void agregarLineaCruda(String lineaCompleta) 
+  {
+    NodoEvento nuevoNodo= new NodoEvento(lineaCompleta);
+    nuevoNodo.siguiente= cabeza;
+    cabeza= nuevoNodo;
+    cantidadNodos= cantidadNodos + 1;
+  }
+  //Recorre la Lista Enlazada completa y exporta todos los nodos a un archivo de texto (.txt)
+  void guardarEnArchivo(String nombreArchivo) 
+  {
+    if ( cantidadNodos == 0 ) 
+    {
+      return; //Si no hay nada en RAM, no creo un archivo vacío
+    }
+    String[] lineas= new String[cantidadNodos];
+    NodoEvento actual= cabeza;
+    int i= 0;
+    //Voy pasando el texto de cada nodo al arreglo para que saveStrings lo escriba en disco
+    while ( actual != null && i < cantidadNodos ) 
+    {
+      lineas[i]= actual.textoEvento;
+      actual= actual.siguiente;
+      i= i + 1;
+    }
+    saveStrings(nombreArchivo, lineas);
+  }
+  //Lee el archivo .txt guardado en la carpeta del sketch y reconstruye la Lista Enlazada en RAM
+  void cargarDesdeArchivo(String nombreArchivo) 
+  {
+    File archivo= new File(sketchPath(nombreArchivo));
+    if ( archivo.exists() == true ) 
+    {
+      String[] lineas= loadStrings(nombreArchivo);
+      if ( lineas != null && lineas.length > 0 ) 
+      {
+        //Limpio la lista actual antes de cargar el respaldo para no duplicar registros
+        cabeza= null;
+        cantidadNodos= 0;
+        //Recorro el arreglo de atrás para adelante porque inserto por cabeza: así el más nuevo queda arriba
+        for (int i= lineas.length - 1; i >= 0; i--) 
+        {
+          if ( trim(lineas[i]).length() > 0 ) 
+          {
+            agregarLineaCruda(lineas[i]);
+          }
+        }
+      }
+    } 
+    else 
+    {
+      agregarEvento("No existe archivo .txt guardado aún.");
+    }
   }
 }
 //Variables para la conexión por puerto Serie con la placa
@@ -193,10 +248,14 @@ void dibujarBarraTolva(float x, float y, float ancho, float alto, float porcenta
   strokeWeight(2);
   fill(20, 25, 36);
   rect(x, y, ancho, alto, 10);
-  //Umbral calibrado en 21.0 cm (sincronizado con el Arduino para que salte la alerta al mismo tiempo)
+  //Umbral calibrado en 21.0 cm (sincronizado con el Arduino) y aviso amarillo al bajar del 30%
   if ( cm > 21.0 ) 
   {
-    fill(255, 71, 87); //Rojo: Alerta
+    fill(255, 71, 87); //Rojo: Alerta de tolva vacía
+  } 
+  else if ( porcentaje < 30.0 ) 
+  {
+    fill(255, 195, 18); //Amarillo: Nivel bajo (menos del 30%)
   } 
   else 
   {
@@ -470,11 +529,22 @@ void dibujarColumnaHistorial()
       actual= actual.siguiente;
       contadorMostrados= contadorMostrados + 1;
     }
-    //Acá abajo después voy a poner los botones de Guardar y Cargar el archivo .txt
+    //Botones inferiores para persistencia del historial en archivo .txt
+    boolean mouseEnGuardar= (mouseX > 790 && mouseX < 938 && mouseY > 590 && mouseY < 632);
+    boolean mouseEnCargar= (mouseX > 952 && mouseX < 1100 && mouseY > 590 && mouseY < 632);
+    noStroke();
+    //Botón Guardar .txt (verde)
+    fill(mouseEnGuardar ? color(70, 230, 140) : color(46, 200, 110));
+    rect(790, 590, 148, 42, 8);
+    fill(20);
     textAlign(CENTER, CENTER);
-    fill(140);
-    textSize(12);
-    text("Pendiente: guardado en archivo (.txt)", 945, 612);
+    textSize(13);
+    text("Guardar .txt", 864, 611);
+    //Botón Cargar .txt (azul)
+    fill(mouseEnCargar ? color(90, 175, 255) : color(52, 152, 219));
+    rect(952, 590, 148, 42, 8);
+    fill(255);
+    text("Cargar .txt", 1026, 611);
   }
 }
 //Funcion para detectar los clics del mouse en los botones (patitas, gota y consola)
@@ -503,6 +573,19 @@ void mousePressed()
   if ( mouseX > 790 && mouseX < 1100 && mouseY > 125 && mouseY < 170 ) 
   {
     mostrarHistorial= !mostrarHistorial;
+  }
+  //Si la consola está abierta, reviso si hice clic en Guardar .txt o Cargar .txt
+  if ( mostrarHistorial == true ) 
+  {
+    if ( mouseX > 790 && mouseX < 938 && mouseY > 590 && mouseY < 632 ) 
+    {
+      historialEventos.agregarEvento("Historial guardado en .txt");
+      historialEventos.guardarEnArchivo("historial_SIEMF.txt");
+    }
+    if ( mouseX > 952 && mouseX < 1100 && mouseY > 590 && mouseY < 632 ) 
+    {
+      historialEventos.cargarDesdeArchivo("historial_SIEMF.txt");
+    }
   }
 }
 //Envia la letra al Arduino por USB (y si estoy sin placa, actualiza la pantalla para poder probar)
@@ -601,4 +684,4 @@ void keyPressed()
     verificarNuevosEventos();
   }
 }
-//Me falta hacer: Guardar y cargar el historial en un archivo TXT
+//Estaa es la versión final (hasta el momento)
